@@ -5,9 +5,30 @@ from steps.model_train import train_model
 from zenml import pipeline
 
 
-@pipeline(enable_cache=False)
+'''@pipeline(enable_cache=False)
 def train_pipeline(feature_set: str = "baseline", model_name: str = "lightgbm"):
     df = ingest_data()
     x_train, x_test, y_train, y_test = clean_data(df, feature_set=feature_set)
     model = train_model(x_train, x_test, y_train, y_test, model_name=model_name)
+    evaluation(model, x_test, y_test)'''
+
+@pipeline(enable_cache=False)
+def train_pipeline(
+    feature_set: str = "baseline",
+    model_name: str = "lightgbm",
+    split_by: str = "order_id",
+):
+    df = ingest_data()
+    x_train, x_test, y_train, y_test = clean_data(
+        df, feature_set=feature_set, split_by=split_by
+    )
+    model = train_model(
+        x_train,
+        x_test,
+        y_train,
+        y_test,
+        model_name=model_name,
+        feature_set=feature_set,
+        split_by=split_by,
+    )
     evaluation(model, x_test, y_test)

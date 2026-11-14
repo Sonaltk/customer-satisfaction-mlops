@@ -5,7 +5,9 @@ from typing import Union
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from typing import Optional, Union
 
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
 class DataStrategy(ABC):
     """
@@ -112,20 +114,41 @@ class DataPreprocessStrategy(DataStrategy):
 
 class DataDivideStrategy(DataStrategy):
     """
-    Data dividing strategy which divides the data into train and test data.
+    Divides the data into train and test sets. If `groups` is given, all rows
+    sharing a group value (e.g. the same order_id) land on the same side.
     """
 
+    def __init__(
+        self,
+        groups: Optional[pd.Series] = None,
+        test_size: float = 0.2,
+        random_state: int = 42,
+    ) -> None:
+        self.groups = groups
+        self.test_size = test_size
+        self.random_state = random_state
+
     def handle_data(self, data: pd.DataFrame) -> Union[pd.DataFrame, pd.Series]:
-        """
-        Divides the data into train and test data.
-        """
         try:
             X = data.drop("review_score", axis=1)
             y = data["review_score"]
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=42
+
+            if self.groups is None:
+                return train_test_split(
+                    X, y, test_size=self.test_size, random_state=self.random_state
+                )
+
+            groups = self.groups.loc[data.index]
+            splitter = GroupShuffleSplit(
+                n_splits=1, test_size=self.test_size, random_state=self.random_state
             )
-            return X_train, X_test, y_train, y_test
+            train_idx, test_idx = next(splitter.split(X, y, groups=groups))
+            return (
+                X.iloc[train_idx],
+                X.iloc[test_idx],
+                y.iloc[train_idx],
+                y.iloc[test_idx],
+            )
         except Exception as e:
             logging.error(e)
             raise e

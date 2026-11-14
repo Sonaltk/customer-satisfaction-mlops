@@ -24,13 +24,17 @@ def train_model(
     y_test: pd.Series,
     model_name: str = "lightgbm",
     fine_tuning: bool = False,
+    feature_set: str = "baseline",
+    split_by: str = "order_id",
 ) -> RegressorMixin:
     try:
         mlflow.log_param("model_name", model_name)
         mlflow.log_param("fine_tuning", fine_tuning)
+        mlflow.log_param("feature_set", feature_set)
+        mlflow.log_param("split_by", split_by)
         mlflow.log_param("n_features", x_train.shape[1])
         mlflow.set_tag("feature_columns", ",".join(x_train.columns))
-        mlflow.log_param("feature_set", "pre_order" if x_train.shape[1] > 12 and "actual_delivery_days" not in x_train.columns else ("full" if "actual_delivery_days" in x_train.columns else "baseline"))
+
         if model_name == "lightgbm":
             mlflow.lightgbm.autolog()
             model = LightGBMModel()
