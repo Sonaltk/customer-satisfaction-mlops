@@ -1,0 +1,7 @@
+venv/
+.zen/
+__pycache__/
+*.pyc
+.DS_Store
+saved_model/
+mlruns/
