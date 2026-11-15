@@ -24,7 +24,7 @@ behind a quality gate.
 | Environment | Python 3.8-era pins | Working setup on Python 3.10 / Apple Silicon (see below) |
 
 ## Results
-![MLflow run comparison](/Users/sonalkhairnar/Downloads/mlops-projects-course-main/customer-satisfaction-mlops-main/docs/images/mlflow_runs.png)
+![MLflow run comparison](docs/images/mlflow_runs.png)
 Metrics are on a held-out test set split by order. R² is low across the board
 because review scores are noisy and mostly 5 stars.
 
