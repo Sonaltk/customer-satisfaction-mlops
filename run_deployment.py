@@ -23,50 +23,53 @@ DEPLOY_AND_PREDICT = "deploy_and_predict"
     "-c",
     type=click.Choice([DEPLOY, PREDICT, DEPLOY_AND_PREDICT]),
     default=DEPLOY_AND_PREDICT,
-    help="Optionally you can choose to only run the deployment "
-    "pipeline to train and deploy a model (`deploy`), or to "
-    "only run a prediction against the deployed model "
-    "(`predict`). By default both will be run "
-    "(`deploy_and_predict`).",
+    help="`deploy` trains and (maybe) deploys, `predict` queries the running "
+    "service, `deploy_and_predict` does both.",
 )
 @click.option(
-    "--min-accuracy",
-    default=0.92,
-    help="Minimum accuracy required to deploy the model",
+    "--feature-set",
+    type=click.Choice(["baseline", "pre_order", "full"]),
+    default="full",
 )
-def main(config: str, min_accuracy: float):
-    """Run the MLflow example pipeline."""
-    # get the MLflow model deployer stack component
-    mlflow_model_deployer_component = MLFlowModelDeployer.get_active_model_deployer()
-    deploy = config == DEPLOY or config == DEPLOY_AND_PREDICT
-    predict = config == PREDICT or config == DEPLOY_AND_PREDICT
+@click.option(
+    "--model-name",
+    type=click.Choice(["lightgbm", "xgboost", "randomforest", "linear_regression"]),
+    default="lightgbm",
+)
+@click.option("--fine-tuning", is_flag=True, help="Tune hyperparameters with Optuna.")
+@click.option(
+    "--max-mse",
+    default=1.6,
+    help="Deploy only if the test MSE is at or below this value (lower is better).",
+)
+def main(config: str, feature_set: str, model_name: str, fine_tuning: bool, max_mse: float):
+    model_deployer = MLFlowModelDeployer.get_active_model_deployer()
+    deploy = config in (DEPLOY, DEPLOY_AND_PREDICT)
+    predict = config in (PREDICT, DEPLOY_AND_PREDICT)
 
     if deploy:
-        # Initialize a continuous deployment pipeline run
         continuous_deployment_pipeline(
-            min_accuracy=min_accuracy,
+            feature_set=feature_set,
+            model_name=model_name,
+            fine_tuning=fine_tuning,
+            max_mse=max_mse,
             workers=3,
             timeout=60,
         )
 
     if predict:
-        # Initialize an inference pipeline run
         inference_pipeline(
             pipeline_name="continuous_deployment_pipeline",
             pipeline_step_name="mlflow_model_deployer_step",
+            feature_set=feature_set,
         )
 
     print(
-        "You can run:\n "
-        f"[italic green]    mlflow ui --backend-store-uri '{get_tracking_uri()}"
-        "[/italic green]\n ...to inspect your experiment runs within the MLflow"
-        " UI.\nYou can find your runs tracked within the "
-        "`mlflow_example_pipeline` experiment. There you'll also be able to "
-        "compare two or more runs.\n\n"
+        "Inspect your runs with:\n"
+        f"[italic green]    mlflow ui --backend-store-uri '{get_tracking_uri()}'[/italic green]\n"
     )
 
-    # fetch existing services with same pipeline name, step name and model name
-    existing_services = mlflow_model_deployer_component.find_model_server(
+    existing_services = model_deployer.find_model_server(
         pipeline_name="continuous_deployment_pipeline",
         pipeline_step_name="mlflow_model_deployer_step",
         model_name="model",
@@ -76,24 +79,22 @@ def main(config: str, min_accuracy: float):
         service = cast(MLFlowDeploymentService, existing_services[0])
         if service.is_running:
             print(
-                f"The MLflow prediction server is running locally as a daemon "
-                f"process service and accepts inference requests at:\n"
-                f"    {service.prediction_url}\n"
-                f"To stop the service, run "
-                f"[italic green]`zenml model-deployer models delete "
-                f"{str(service.uuid)}`[/italic green]."
+                "The MLflow prediction server is running locally and accepts "
+                f"requests at:\n    {service.prediction_url}\n"
+                "To stop it, run "
+                f"[italic green]`zenml model-deployer models delete {str(service.uuid)}`[/italic green]."
             )
         elif service.is_failed:
             print(
-                f"The MLflow prediction server is in a failed state:\n"
+                "The MLflow prediction server is in a failed state:\n"
                 f" Last state: '{service.status.state.value}'\n"
                 f" Last error: '{service.status.last_error}'"
             )
     else:
         print(
-            "No MLflow prediction server is currently running. The deployment "
-            "pipeline must run first to train a model and deploy it. Execute "
-            "the same command with the `--deploy` argument to deploy a model."
+            "No MLflow prediction server is currently running. Either the "
+            "deployment pipeline has not run yet, or the model did not pass "
+            "the MSE gate."
         )
 
 

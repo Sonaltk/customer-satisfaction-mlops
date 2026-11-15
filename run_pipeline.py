@@ -19,9 +19,15 @@ from zenml.client import Client
     type=click.Choice(["order_id", "customer_unique_id", "none"]),
     default="order_id",
 )
-def main(feature_set: str, model_name: str, split_by: str):
+@click.option("--fine-tuning", is_flag=True, help="Run Optuna tuning on a validation split.")
+def main(feature_set: str, model_name: str, split_by: str, fine_tuning: bool):
     print(Client().active_stack.experiment_tracker.get_tracking_uri())
-    train_pipeline(feature_set=feature_set, model_name=model_name, split_by=split_by)
+    train_pipeline(
+        feature_set=feature_set,
+        model_name=model_name,
+        split_by=split_by,
+        fine_tuning=fine_tuning,
+    )
 
 
 if __name__ == "__main__":

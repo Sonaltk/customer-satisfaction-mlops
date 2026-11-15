@@ -7,120 +7,108 @@ import xgboost as xgb
 from lightgbm import LGBMRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import GroupShuffleSplit
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 class Model(ABC):
-    """
-    Abstract base class for all models.
-    """
-
     @abstractmethod
-    def train(self, x_train, y_train):
-        """
-        Trains the model on the given data.
-
-        Args:
-            x_train: Training data
-            y_train: Target data
-        """
+    def train(self, x_train, y_train, **kwargs):
         pass
 
     @abstractmethod
-    def optimize(self, trial, x_train, y_train, x_test, y_test):
-        """
-        Optimizes the hyperparameters of the model.
-
-        Args:
-            trial: Optuna trial object
-            x_train: Training data
-            y_train: Target data
-            x_test: Testing data
-            y_test: Testing target
-        """
+    def optimize(self, trial, x_tr, y_tr, x_val, y_val) -> float:
+        """Return the validation MSE for the trial's hyperparameters."""
         pass
+
+
+def _val_mse(model, x_val, y_val) -> float:
+    return mean_squared_error(y_val, model.predict(x_val))
 
 
 class RandomForestModel(Model):
-    """
-    RandomForestModel that implements the Model interface.
-    """
-
     def train(self, x_train, y_train, **kwargs):
-        reg = RandomForestRegressor(**kwargs)
+        reg = RandomForestRegressor(random_state=42, n_jobs=-1, **kwargs)
         reg.fit(x_train, y_train)
         return reg
 
-    def optimize(self, trial, x_train, y_train, x_test, y_test):
-        n_estimators = trial.suggest_int("n_estimators", 1, 200)
-        max_depth = trial.suggest_int("max_depth", 1, 20)
-        min_samples_split = trial.suggest_int("min_samples_split", 2, 20)
-        reg = self.train(x_train, y_train, n_estimators=n_estimators, max_depth=max_depth, min_samples_split=min_samples_split)
-        return reg.score(x_test, y_test)
+    def optimize(self, trial, x_tr, y_tr, x_val, y_val):
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 100, 250),
+            "max_depth": trial.suggest_int("max_depth", 4, 16),
+            "min_samples_leaf": trial.suggest_int("min_samples_leaf", 5, 100),
+            "max_features": trial.suggest_float("max_features", 0.3, 1.0),
+        }
+        return _val_mse(self.train(x_tr, y_tr, **params), x_val, y_val)
+
 
 class LightGBMModel(Model):
-    """
-    LightGBMModel that implements the Model interface.
-    """
-
     def train(self, x_train, y_train, **kwargs):
-        reg = LGBMRegressor(**kwargs)
+        reg = LGBMRegressor(random_state=42, verbose=-1, **kwargs)
         reg.fit(x_train, y_train)
         return reg
 
-    def optimize(self, trial, x_train, y_train, x_test, y_test):
-        n_estimators = trial.suggest_int("n_estimators", 1, 200)
-        max_depth = trial.suggest_int("max_depth", 1, 20)
-        learning_rate = trial.suggest_uniform("learning_rate", 0.01, 0.99)
-        reg = self.train(x_train, y_train, n_estimators=n_estimators, learning_rate=learning_rate, max_depth=max_depth)
-        return reg.score(x_test, y_test)
+    def optimize(self, trial, x_tr, y_tr, x_val, y_val):
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 100, 600),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 15, 127),
+            "min_child_samples": trial.suggest_int("min_child_samples", 20, 200),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+        }
+        return _val_mse(self.train(x_tr, y_tr, **params), x_val, y_val)
 
 
 class XGBoostModel(Model):
-    """
-    XGBoostModel that implements the Model interface.
-    """
-
     def train(self, x_train, y_train, **kwargs):
-        reg = xgb.XGBRegressor(**kwargs)
+        reg = xgb.XGBRegressor(random_state=42, **kwargs)
         reg.fit(x_train, y_train)
         return reg
 
-    def optimize(self, trial, x_train, y_train, x_test, y_test):
-        n_estimators = trial.suggest_int("n_estimators", 1, 200)
-        max_depth = trial.suggest_int("max_depth", 1, 30)
-        learning_rate = trial.suggest_loguniform("learning_rate", 1e-7, 10.0)
-        reg = self.train(x_train, y_train, n_estimators=n_estimators, learning_rate=learning_rate, max_depth=max_depth)
-        return reg.score(x_test, y_test)
+    def optimize(self, trial, x_tr, y_tr, x_val, y_val):
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 100, 600),
+            "max_depth": trial.suggest_int("max_depth", 3, 8),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
+        }
+        return _val_mse(self.train(x_tr, y_tr, **params), x_val, y_val)
 
 
 class LinearRegressionModel(Model):
-    """
-    LinearRegressionModel that implements the Model interface.
-    """
-
     def train(self, x_train, y_train, **kwargs):
         reg = LinearRegression(**kwargs)
         reg.fit(x_train, y_train)
         return reg
 
-    # For linear regression, there might not be hyperparameters that we want to tune, so we can simply return the score
-    def optimize(self, trial, x_train, y_train, x_test, y_test):
-        reg = self.train(x_train, y_train)
-        return reg.score(x_test, y_test)
+    def optimize(self, trial, x_tr, y_tr, x_val, y_val):
+        return _val_mse(self.train(x_tr, y_tr), x_val, y_val)
+
 
 class HyperparameterTuner:
-    """
-    Class for performing hyperparameter tuning. It uses Model strategy to perform tuning.
-    """
+    """Tunes on a validation split carved out of the TRAINING data (grouped by
+    order), so the test set is never used for model selection."""
 
-    def __init__(self, model, x_train, y_train, x_test, y_test):
+    def __init__(self, model, x_train, y_train, groups_train, val_size=0.2, seed=42):
+        splitter = GroupShuffleSplit(n_splits=1, test_size=val_size, random_state=seed)
+        tr_idx, val_idx = next(splitter.split(x_train, y_train, groups=groups_train))
         self.model = model
-        self.x_train = x_train
-        self.y_train = y_train
-        self.x_test = x_test
-        self.y_test = y_test
+        self.x_tr, self.x_val = x_train.iloc[tr_idx], x_train.iloc[val_idx]
+        self.y_tr, self.y_val = y_train.iloc[tr_idx], y_train.iloc[val_idx]
 
-    def optimize(self, n_trials=100):
-        study = optuna.create_study(direction="maximize")
-        study.optimize(lambda trial: self.model.optimize(trial, self.x_train, self.y_train, self.x_test, self.y_test), n_trials=n_trials)
-        return study.best_trial.params
+    def optimize(self, n_trials: int = 30):
+        study = optuna.create_study(
+            direction="minimize", sampler=optuna.samplers.TPESampler(seed=42)
+        )
+        study.optimize(
+            lambda t: self.model.optimize(
+                t, self.x_tr, self.y_tr, self.x_val, self.y_val
+            ),
+            n_trials=n_trials,
+        )
+        return study.best_trial.params, study.best_value

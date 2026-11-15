@@ -19,11 +19,11 @@ experiment_tracker = Client().active_stack.experiment_tracker
 @step(experiment_tracker=experiment_tracker.name)
 def train_model(
     x_train: pd.DataFrame,
-    x_test: pd.DataFrame,
     y_train: pd.Series,
-    y_test: pd.Series,
+    groups_train: pd.Series,
     model_name: str = "lightgbm",
     fine_tuning: bool = False,
+    n_trials: int = 30,
     feature_set: str = "baseline",
     split_by: str = "order_id",
 ) -> RegressorMixin:
@@ -51,8 +51,13 @@ def train_model(
             raise ValueError(f"Model name not supported: {model_name}")
 
         if fine_tuning:
-            tuner = HyperparameterTuner(model, x_train, y_train, x_test, y_test)
-            best_params = tuner.optimize()
+            tuner = HyperparameterTuner(model, x_train, y_train, groups_train)
+            best_params, best_val_mse = tuner.optimize(n_trials=n_trials)
+            mlflow.log_param("n_trials", n_trials)
+            mlflow.log_metric("best_val_mse", best_val_mse)
+            for k, v in best_params.items():
+                mlflow.log_param(f"best_{k}", v)
+            # retrain on the full training set with the best parameters
             return model.train(x_train, y_train, **best_params)
         return model.train(x_train, y_train)
     except Exception as e:
