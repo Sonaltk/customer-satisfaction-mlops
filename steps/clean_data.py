@@ -8,34 +8,37 @@ from model.data_cleaning import (
     DataPreprocessStrategy,
 )
 from typing_extensions import Annotated
-
-# from zenml.steps import Output, step
 from zenml import step
 
 
 @step
 def clean_data(
     data: pd.DataFrame,
+    feature_set: str = "baseline",
+    split_by: str = "order_id",
 ) -> Tuple[
     Annotated[pd.DataFrame, "x_train"],
     Annotated[pd.DataFrame, "x_test"],
     Annotated[pd.Series, "y_train"],
     Annotated[pd.Series, "y_test"],
+    Annotated[pd.Series, "groups_train"],
 ]:
-    """Data cleaning class which preprocesses the data and divides it into train and test data.
-
-    Args:
-        data: pd.DataFrame
-    """
+    """Preprocess, split by group, and also return the training group ids."""
     try:
-        preprocess_strategy = DataPreprocessStrategy()
-        data_cleaning = DataCleaning(data, preprocess_strategy)
-        preprocessed_data = data_cleaning.handle_data()
+        groups = None if split_by == "none" else data[split_by]
 
-        divide_strategy = DataDivideStrategy()
-        data_cleaning = DataCleaning(preprocessed_data, divide_strategy)
-        x_train, x_test, y_train, y_test = data_cleaning.handle_data()
-        return x_train, x_test, y_train, y_test
+        preprocessed = DataCleaning(
+            data, DataPreprocessStrategy(feature_set=feature_set)
+        ).handle_data()
+        x_train, x_test, y_train, y_test = DataCleaning(
+            preprocessed, DataDivideStrategy(groups=groups)
+        ).handle_data()
+
+        if groups is None:
+            groups_train = pd.Series(x_train.index, index=x_train.index, name="group")
+        else:
+            groups_train = groups.loc[x_train.index]
+        return x_train, x_test, y_train, y_test, groups_train
     except Exception as e:
         logging.error(e)
         raise e

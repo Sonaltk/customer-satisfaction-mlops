@@ -1,146 +1,140 @@
-# Predicting how a customer will feel about a product before they even ordered it
+# Customer Satisfaction Prediction: an MLOps pipeline with ZenML and MLflow
 
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/zenml)](https://pypi.org/project/zenml/)
+Predicts the review score (1-5) of an order from the
+[Olist Brazilian E-Commerce dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce),
+using a ZenML pipeline with MLflow experiment tracking and an MLflow-served model
+behind a quality gate.
 
-**Problem statement**: For a given customer's historical data, we are tasked to predict the review score for the next order or purchase. We will be using the [Brazilian E-Commerce Public Dataset by Olist](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce). This dataset has information on 100,000 orders from 2016 to 2018 made at multiple marketplaces in Brazil. Its features allow viewing charges from various dimensions: from order status, price, payment, freight performance to customer location, product attributes and finally, reviews written by customers. The objective here is to predict the customer satisfaction score for a given order based on features like order status, price, payment, etc. In order to achieve this in a real-world scenario, we will be using [ZenML](https://zenml.io/) to build a production-ready pipeline to predict the customer satisfaction score for the next order or purchase.
+> **Credit.** This project started from ZenML's
+> [customer-satisfaction example](https://github.com/zenml-io/zenml-projects) via the
+> [mlops-projects-course](https://github.com/ayush714/mlops-projects-course) by ayush714.
+> The original template is kept as the starting point; the changes listed below are mine.
 
-The purpose of this repository is to demonstrate how [ZenML](https://github.com/zenml-io/zenml) empowers your business to build and deploy machine learning pipelines in a multitude of ways:
+## What I changed
 
-- By offering you a framework and template to base your own work on.
-- By integrating with tools like [MLflow](https://mlflow.org/) for deployment, tracking and more
-- By allowing you to build and deploy your machine learning pipelines easily
+| Area | Original | This repo |
+|---|---|---|
+| Features | 12 numeric columns; date columns dropped | Three feature sets: `baseline`, `pre_order` (known at purchase), `full` (adds actual delivery performance) |
+| Train/test split | Random split | **Split by order**: the data has 115,609 rows but only 96,516 orders, so a random split leaks duplicate rows across train and test |
+| Hyperparameter tuning | Optimized on the test set | Optuna on a validation split carved from the training data (grouped by order); test set used once |
+| Deployment gate | Compared **R² > 0.92** (unreachable, so nothing ever deployed) | Deploys only if **test MSE <= threshold**; keeps the running model otherwise |
+| Experiments | One model | LightGBM, XGBoost, Random Forest, Linear Regression across all feature sets, tracked in MLflow |
+| App | Asked for 12 inputs | Takes raw order fields and builds features with the same preprocessing code as training |
+| Tests | Broken | 15 pytest tests, including regression tests for the leakage bug |
+| Environment | Python 3.8-era pins | Working setup on Python 3.10 / Apple Silicon (see below) |
 
-## :snake: Python Requirements
+## Results
+![MLflow run comparison](docs/images/mlflow_runs.png)
+Metrics are on a held-out test set split by order. R² is low across the board
+because review scores are noisy and mostly 5 stars.
 
-Let's jump into the Python packages you need. Within the Python environment of your choice, run:
+**R² by model and feature set (default hyperparameters)**
+
+| Model | baseline | pre_order | full |
+|---|---|---|---|
+| Linear Regression | 0.015 | 0.020 | 0.128 |
+| Random Forest | -0.068 | 0.006 | 0.204 |
+| XGBoost | 0.019 | 0.023 | 0.214 |
+| LightGBM | 0.033 | 0.047 | 0.233 |
+
+**After tuning (`full` features)**
+
+| Model | MSE | R² |
+|---|---|---|
+| LightGBM | 1.462 | 0.236 |
+| XGBoost | 1.454 | 0.240 |
+| Random Forest | 1.460 | 0.237 |
+
+Takeaways:
+
+- Delivery performance is the main signal: R² goes from about 0.03 (baseline) to about 0.24.
+- Features known at purchase time barely help (0.05), so predicting satisfaction *before* an
+  order is not feasible with this data. The model predicts it once delivery outcomes are known.
+- After tuning, the three tree models are within 0.004 R² of each other. The features, not the
+  algorithm, are the limit; I would not call any of them the winner.
+
+### The leakage finding
+
+With the original random split, Random Forest scored R² 0.408 on `full` features. After
+splitting by `order_id`, the same model scores **0.204**. Multi-item orders appear as several
+nearly identical rows with the same review score, so a random split lets a model "predict" test
+rows it has effectively seen. Linear Regression barely changed (0.132 -> 0.128), which fits: it
+cannot memorize rows. The original repo's baseline R² of 0.083 was inflated the same way
+(honest baseline: about 0.03).
+
+### Deployment gate
+
+| `--max-mse` | Test MSE | Outcome |
+|---|---|---|
+| 1.6 | 1.467 | Model deployed, MLflow server started |
+| 1.0 | 1.467 | Deployment skipped; the previously deployed service (same UUID) kept running |
+
+## Pipeline
+
+```mermaid
+flowchart LR
+    A[ingest_data] --> B[clean_data: features + grouped split]
+    B --> C[train_model: optional Optuna tuning]
+    C --> D[evaluation: MSE / R2 / RMSE]
+    D --> E{deployment_trigger: MSE <= threshold?}
+    E -- yes --> F[MLflow model server]
+    E -- no --> G[keep current model]
+    F --> H[Streamlit app]
+```
+
+## Setup
+
+Tested on Python 3.10, macOS (Apple Silicon). This project pins an older ZenML (0.42.2), so
+several packages must be held back; the order matters.
 
 ```bash
-git clone https://github.com/zenml-io/zenml-projects.git
-cd zenml-projects/customer-satisfaction
+python3.10 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
-```
 
-Starting with ZenML 0.20.0, ZenML comes bundled with a React-based dashboard. This dashboard allows you
-to observe your stacks, stack components and pipeline DAGs in a dashboard interface. To access this, you need to [launch the ZenML Server and Dashboard locally](https://docs.zenml.io/user-guide/starter-guide#explore-the-dashboard), but first you must install the optional dependencies for the ZenML server:
+# on macOS, LightGBM and XGBoost need OpenMP
+brew install libomp
 
-```bash
-pip install zenml["server"]
-zenml up
-```
-
-If you are running the `run_deployment.py` script, you will also need to install some integrations using ZenML:
-
-```bash
-zenml integration install mlflow -y
-```
-
-The project can only be executed with a ZenML stack that has an MLflow experiment tracker and model deployer as a component. Configuring a new stack with the two components are as follows:
-
-```bash
-zenml integration install mlflow -y
+zenml init
+zenml integration install mlflow -y   # if mlflow is not already installed
 zenml experiment-tracker register mlflow_tracker --flavor=mlflow
 zenml model-deployer register mlflow --flavor=mlflow
 zenml stack register mlflow_stack -a default -o default -d mlflow -e mlflow_tracker --set
 ```
 
-## 📙 Resources & References
+The dataset is expected at `data/olist_customers_dataset.csv` (the merged Olist table).
 
-We had written a blog that explains this project in-depth: [Predicting how a customer will feel about a product before they even ordered it](https://blog.zenml.io/customer_satisfaction/).
-
-If you'd like to watch the video that explains the project, you can watch the [video](https://youtu.be/L3_pFTlF9EQ).
-
-## :thumbsup: The Solution
-
-In order to build a real-world workflow for predicting the customer satisfaction score for the next order or purchase (which will help make better decisions), it is not enough to just train the model once.
-
-Instead, we are building an end-to-end pipeline for continuously predicting and deploying the machine learning model, alongside a data application that utilizes the latest deployed model for the business to consume.
-
-This pipeline can be deployed to the cloud, scale up according to our needs, and ensure that we track the parameters and data that flow through every pipeline that runs. It includes raw data input, features, results, the machine learning model and model parameters, and prediction outputs. ZenML helps us to build such a pipeline in a simple, yet powerful, way.
-
-In this Project, we give special consideration to the [MLflow integration](https://github.com/zenml-io/zenml/tree/main/examples) of ZenML. In particular, we utilize MLflow tracking to track our metrics and parameters, and MLflow deployment to deploy our model. We also use [Streamlit](https://streamlit.io/) to showcase how this model will be used in a real-world setting.
-
-### Training Pipeline
-
-Our standard training pipeline consists of several steps:
-
-- `ingest_data`: This step will ingest the data and create a `DataFrame`.
-- `clean_data`: This step will clean the data and remove the unwanted columns.
-- `train_model`: This step will train the model and save the model using [MLflow autologging](https://www.mlflow.org/docs/latest/tracking.html).
-- `evaluation`: This step will evaluate the model and save the metrics -- using MLflow autologging -- into the artifact store.
-
-### Deployment Pipeline
-
-We have another pipeline, the `deployment_pipeline.py`, that extends the training pipeline, and implements a continuous deployment workflow. It ingests and processes input data, trains a model and then (re)deploys the prediction server that serves the model if it meets our evaluation criteria. The criteria that we have chosen is a configurable threshold on the [MSE](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_squared_error.html) of the training. The first four steps of the pipeline are the same as above, but we have added the following additional ones:
-
-- `deployment_trigger`: The step checks whether the newly trained model meets the criteria set for deployment.
-- `model_deployer`: This step deploys the model as a service using MLflow (if deployment criteria is met).
-
-In the deployment pipeline, ZenML's MLflow tracking integration is used for logging the hyperparameter values and the trained model itself and the model evaluation metrics -- as MLflow experiment tracking artifacts -- into the local MLflow backend. This pipeline also launches a local MLflow deployment server to serve the latest MLflow model if its accuracy is above a configured threshold.
-
-The MLflow deployment server runs locally as a daemon process that will continue to run in the background after the example execution is complete. When a new pipeline is run which produces a model that passes the accuracy threshold validation, the pipeline automatically updates the currently running MLflow deployment server to serve the new model instead of the old one.
-
-To round it off, we deploy a Streamlit application that consumes the latest model service asynchronously from the pipeline logic. This can be done easily with ZenML within the Streamlit code:
-
-```python
-service = prediction_service_loader(
-   pipeline_name="continuous_deployment_pipeline",
-   pipeline_step_name="mlflow_model_deployer_step",
-   running=False,
-)
-...
-service.predict(...)  # Predict on incoming data from the application
-```
-
-While this ZenML Project trains and deploys a model locally, other ZenML integrations such as the [Seldon](https://github.com/zenml-io/zenml/tree/main/examples/seldon_deployment) deployer can also be used in a similar manner to deploy the model in a more production setting (such as on a Kubernetes cluster). We use MLflow here for the convenience of its local deployment.
-
-![training_and_deployment_pipeline](_assets/training_and_deployment_pipeline_updated.png)
-
-## :notebook: Diving into the code
-
-You can run two pipelines as follows:
-
-- Training pipeline:
+## Usage
 
 ```bash
-python run_pipeline.py
-```
+export SETUPTOOLS_USE_DISTUTILS=stdlib
 
-- The continuous deployment pipeline:
+# train and track an experiment
+python run_pipeline.py --feature-set full --model-name lightgbm
+python run_pipeline.py --feature-set full --model-name xgboost --fine-tuning
 
-```bash
-python run_deployment.py
-```
+# train, gate on test MSE, deploy, and run a sample inference
+python run_deployment.py --max-mse 1.6
 
-## 🕹 Demo Streamlit App
-
-There is a live demo of this project using [Streamlit](https://streamlit.io/) which you can find [here](https://share.streamlit.io/ayush714/customer-satisfaction/main). It takes some input features for the product and predicts the customer satisfaction rate using the latest trained models. If you want to run this Streamlit app in your local system, you can run the following command:-
-
-```bash
+# the app (needs a running model server)
 streamlit run streamlit_app.py
+
+# tests
+python -m pytest -v
 ```
 
-## :question: FAQ
+Options: `--feature-set {baseline,pre_order,full}`,
+`--model-name {lightgbm,xgboost,randomforest,linear_regression}`,
+`--split-by {order_id,customer_unique_id,none}`, `--fine-tuning`.
+View experiments with `mlflow ui --backend-store-uri <path printed by the run>`
+(add `--port 5001` on macOS if AirPlay is using port 5000).
 
-1. When running the continuous deployment pipeline, I get an error stating: `No Step found for the name mlflow_deployer`.
+## Limitations
 
-   Solution: It happens because your artifact store is overridden after running the continuous deployment pipeline. So, you need to delete the artifact store and rerun the pipeline. You can get the location of the artifact store by running the following command:
-
-   ```bash
-   zenml artifact-store describe
-   ```
-
-   and then you can delete the artifact store with the following command:
-
-   **Note**: This is a dangerous / destructive command! Please enter your path carefully, otherwise it may delete other folders from your computer.
-
-   ```bash
-   rm -rf PATH
-   ```
-
-2. When running the continuous deployment pipeline, I get the following error: `No Environment component with name mlflow is currently registered.`
-
-   Solution: You forgot to install the MLflow integration in your ZenML environment. So, you need to install the MLflow integration by running the following command:
-
-   ```bash
-   zenml integration install mlflow -y
-   ```
+- R² around 0.24 means most of the variance in review scores is unexplained. Review text,
+  product category and seller information are not used.
+- Results come from a single split and seed.
+- Serving is local (an MLflow process on port 8000); there is no cloud deployment.
+- Predictions are post-delivery only; the app says so.
+- ZenML 0.42.2 and MLflow 2.2.2 are old versions, kept so the original pipeline structure works.

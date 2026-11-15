@@ -6,8 +6,23 @@ from zenml import pipeline
 
 
 @pipeline(enable_cache=False)
-def train_pipeline():
+def train_pipeline(
+    feature_set: str = "baseline",
+    model_name: str = "lightgbm",
+    split_by: str = "order_id",
+    fine_tuning: bool = False,
+):
     df = ingest_data()
-    x_train, x_test, y_train, y_test = clean_data(df)
-    model = train_model(x_train, x_test, y_train, y_test)
-    r2_score, rmse = evaluation(model, x_test, y_test)
+    x_train, x_test, y_train, y_test, groups_train = clean_data(
+        df, feature_set=feature_set, split_by=split_by
+    )
+    model = train_model(
+        x_train,
+        y_train,
+        groups_train,
+        model_name=model_name,
+        fine_tuning=fine_tuning,
+        feature_set=feature_set,
+        split_by=split_by,
+    )
+    evaluation(model, x_test, y_test)
